@@ -12,7 +12,8 @@ class SearchQueryParser:
             'not': self.evaluateNot,
             'parenthesis': self.evaluateParenthesis,
             'quotes': self.evaluateQuotes,
-            'word': self.evaluateWord
+            'word': self.evaluateWord,
+            'wordwildcard': self.evaluateWordWildcard,
         }
         self._parser = self.parser()
 
@@ -32,7 +33,8 @@ class SearchQueryParser:
         """
         operatorOr = Forward()
 
-        operatorWord = Group(Word(alphanums)).setResultsName('word')
+        operatorWord = Group(Combine(Word(alphanums) + Suppress('*'))).setResultsName('wordwildcard') | \
+                            Group(Word(alphanums)).setResultsName('word')
 
         operatorQuotesContent = Forward()
         operatorQuotesContent << (
@@ -66,9 +68,7 @@ class SearchQueryParser:
         return operatorOr.parseString
 
     def evaluateAnd(self, argument):
-        self.evaluate(argument[0])
-        self.evaluate(argument[1])
-        return
+        return self.evaluate(argument[0]).intersection(self.evaluate(argument[1]))
 
     def evaluateOr(self, argument):
         return self.evaluate(argument[0]).union(self.evaluate(argument[1]))
@@ -95,8 +95,11 @@ class SearchQueryParser:
                 r = r.intersection(self.evaluate(item))
         return self.GetQuotes(' '.join(search_terms), r)
 
-    def evaluateDescriptor(self, argument):
-        return self.GetDescriptor(argument[0])
+    def evaluateWord(self, argument):
+        return self.GetWord(argument[0])
+
+    def evaluateWordWildcard(self, argument):
+        return self.GetWordWildcard(argument[0])
 
     def evaluate(self, argument):
         methods = self._methods[argument.getName()]
@@ -104,14 +107,17 @@ class SearchQueryParser:
 
     def Parse(self, query):
         #print self._parser(query)[0]
-        parsedQuery = self._parser(query)[0]
-        return self.evaluate(parsedQuery)
+        result = self._parser(query)[0]
+        return self.evaluate(result)
 
-    def GetDescriptor(self, word):
-        return None
+    def GetWord(self, word):
+        return set()
+
+    def GetWordWildcard(self, word):
+        return set()
 
     def GetQuotes(self, search_string, tmp_result):
-        return None
+        return set()
 
     def GetNot(self, not_set):
         return set().difference(not_set)
@@ -120,54 +126,81 @@ class SearchQueryParser:
 class ParserTest(SearchQueryParser):
     """Tests the parser with some search queries
     tests containts a dictionary with tests and expected results.
-    Actual logic looks like s1 = 4. Where s1 corresponds to a question and 4 corresponds to code.
     """
     tests = {
-        'men or women': 15,
-        'gender is men or women and age is 21-25 and favouriteColour is red': 3
-        'gender is men or women and age is 21-25 and favouriteColour is green': 3
-        'gender is men or women and age is 21-25 and favouriteColour is blue': 1
+        'help': {1, 2, 4, 5},
+        'help or hulp': {1, 2, 3, 4, 5},
+        'help and hulp': {2},
+        'help hulp': {2},
+        'help and hulp or hilp': {2, 3, 4},
+        'help or hulp and hilp': {1, 2, 3, 4, 5},
+        'help or hulp or hilp or halp': {1, 2, 3, 4, 5, 6},
+        '(help or hulp) and (hilp or halp)': {3, 4, 5},
+        'help and (hilp or halp)': {4, 5},
+        '(help and (hilp or halp)) or hulp': {2, 3, 4, 5},
+        'not help': {3, 6, 7, 8},
+        'not hulp and halp': {5, 6},
+        'not (help and halp)': {1, 2, 3, 4, 6, 7, 8},
+        '"help me please"': {2},
+        '"help me please" or hulp': {2, 3},
+        '"help me please" or (hulp and halp)': {2},
+        'help*': {1, 2, 4, 5, 8},
+        'help or hulp*': {1, 2, 3, 4, 5},
+        'help* and hulp': {2},
+        'help and hulp* or hilp': {2, 3, 4},
+        'help* or hulp or hilp or halp': {1, 2, 3, 4, 5, 6, 8},
+        '(help or hulp*) and (hilp* or halp)': {3, 4, 5},
+        'help* and (hilp* or halp*)': {4, 5},
+        '(help and (hilp* or halp)) or hulp*': {2, 3, 4, 5},
+        'not help* and halp': {6},
+        'not (help* and helpe*)': {1, 2, 3, 4, 5, 6, 7},
+        '"help* me please"': {2},
+        '"help* me* please" or hulp*': {2, 3},
+        '"help me please*" or (hulp and halp)': {2},
+        '"help me please" not (hulp and halp)': {2},
+        '"help me please" hulp': {2},
+        'help and hilp and not holp': {4},
+        'help hilp not holp': {4},
+        'help hilp and not holp': {4},
     }
 
-    banners = {
-        'man': {
-            'question': 'gender',
-            'count': 7
-        },
-        'woman': {
-            'question': 'gender',
-            'count': 8
-        },
-        '21-25': {
-            'question': 'age',
-            'count': 7
-        },
-        '26-30': {
-            'question': 'age',
-            'count': 3
-        },
-        '31-35': {
-            'question': 'age',
-            'count': 5
-        },
-        'red': {
-            'question': 'favouriteColour',
-            'count': 8
-        },
-        'green': {
-            'question': 'favouriteColour',
-            'count': 4
-        },
-        'blue': {
-            'question': 'favouriteColour',
-            'count': 3
-        }
+    docs = {
+        1: 'help',
+        2: 'help me please hulp',
+        3: 'hulp hilp',
+        4: 'help hilp',
+        5: 'halp thinks he needs help',
+        6: 'he needs halp',
+        7: 'nothing',
+        8: 'helper',
     }
 
-    questions = ['gender', 'age', 'favouriteColour']
+    index = {
+        'help': {1, 2, 4, 5},
+        'me': {2},
+        'please': {2},
+        'hulp': {2, 3},
+        'hilp': {3, 4},
+        'halp': {5, 6},
+        'thinks': {5},
+        'he': {5, 6},
+        'needs': {5, 6},
+        'nothing': {7},
+        'helper': {8},
+    }
 
-    def GetDescriptor(self, descriptor):
-        return self.demographics[descriptor]
+    def GetWord(self, word):
+        if (word in self.index):
+            return self.index[word]
+        else:
+            return set()
+
+    def GetWordWildcard(self, word):
+        result = set()
+        for item in list(self.index.keys()):
+            if word == item[0:len(word)]:
+                result = result.union(self.index[item])
+        return result
 
     def GetQuotes(self, search_string, tmp_result):
         result = set()
